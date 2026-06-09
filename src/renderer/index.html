@@ -1,0 +1,346 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>AudioBookCutter</title>
+    <!-- Content Security Policy allowing local assets, data images, and Google Fonts securely -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' blob:; media-src 'self' blob:;"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="./assets/main.css" type="text/css" rel="stylesheet" />
+  </head>
+
+  <body class="font-['Inter'] text-slate-100 select-none overflow-hidden h-screen w-screen flex flex-col bg-[#070a13]">
+    
+    <!-- Title Bar / Header -->
+    <header class="h-16 flex items-center justify-between px-6 border-b border-slate-800/60 bg-[#0c1020]/90 backdrop-blur-md z-10 shrink-0">
+      <div class="flex items-center gap-3">
+        <!-- Brand Logo Icon -->
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-emerald-400 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M14.121 14.121L19 19m-7-7h7m-7 6h7m-13-3V3.5a1.5 1.5 0 00-3 0V15a1.5 1.5 0 003 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5.206" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="font-['Outfit'] font-bold text-lg leading-none bg-gradient-to-r from-white via-slate-100 to-slate-300 bg-clip-text text-transparent">AudioBookCutter</h1>
+          <span class="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">Lossless Splitter v1.0.1 (2026-06-08)</span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <!-- Status Indicator -->
+        <div class="flex items-center gap-2 px-3 py-1 rounded-full border border-slate-800/80 bg-slate-900/60 text-xs">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span id="statusText" class="text-slate-300 font-medium">Ready</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-grow flex overflow-hidden relative">
+      
+      <!-- Screen 1: Drop-zone (Default State) -->
+      <section id="dropzoneScreen" class="absolute inset-0 flex flex-col items-center justify-center p-8 transition-all duration-500 ease-out z-20">
+        <div id="dropzone" class="w-full max-w-2xl aspect-[16/10] border-2 border-dashed border-slate-700/60 hover:border-indigo-500/60 rounded-3xl bg-[#0f1428]/40 backdrop-blur-sm flex flex-col items-center justify-center p-8 text-center cursor-pointer transition-all duration-300 hover:shadow-2xl hover:shadow-indigo-500/5 group relative overflow-hidden">
+          
+          <!-- Inner Glow Overlay -->
+          <div class="absolute inset-0 bg-gradient-to-tr from-indigo-500/5 to-emerald-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"></div>
+          
+          <!-- Icon Stack -->
+          <div class="w-20 h-20 rounded-2xl bg-slate-800/50 group-hover:bg-indigo-500/10 flex items-center justify-center mb-6 border border-slate-700/40 group-hover:border-indigo-500/30 transition-all duration-300 shadow-inner">
+            <svg class="w-10 h-10 text-slate-400 group-hover:text-indigo-400 transition-colors duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+
+          <h2 class="font-['Outfit'] text-2xl font-bold text-slate-200 mb-2 tracking-tight">Drag and drop your audiobook here</h2>
+          <p class="text-slate-400 text-sm mb-6 max-w-sm">Supports high-quality lossless splitting for <span class="font-semibold text-slate-300">MP3, M4A, and M4B</span> files.</p>
+          
+          <button class="px-6 py-2.5 rounded-xl font-medium text-sm border border-slate-700 bg-slate-800/80 hover:bg-slate-700 hover:text-white transition-all duration-200 shadow-md">
+            Browse Files
+          </button>
+        </div>
+      </section>
+
+      <!-- Screen 2: Audio Workspace (Active State - Hidden by default) -->
+      <section id="workspaceScreen" class="absolute inset-0 flex opacity-0 translate-y-4 pointer-events-none transition-all duration-500 ease-out z-10 bg-[#070a13]">
+        
+        <!-- Left Side: Visual Waveform & Marker Adjustment -->
+        <div class="flex-grow flex flex-col p-6 overflow-y-auto min-w-0">
+          
+          <!-- Loaded File Header -->
+          <div class="flex items-start justify-between gap-4 mb-6 shrink-0 bg-slate-900/40 p-4 border border-slate-800/50 rounded-2xl">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2.5 mb-1.5">
+                <span id="fileTypeBadge" class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 uppercase tracking-wide">M4B</span>
+                <h3 id="fileName" class="font-['Outfit'] font-bold text-lg text-slate-100 truncate">Before the Storm - Barry Goldwater.m4b</h3>
+              </div>
+              <div class="flex gap-4 text-xs text-slate-400 font-medium">
+                <span>Size: <strong id="fileSize" class="text-slate-300">380.2 MB</strong></span>
+                <span>Duration: <strong id="fileDuration" class="text-slate-300">14h 23m 12s</strong></span>
+                <span>Format: <strong id="fileBitrate" class="text-slate-300">64 kbps (AAC)</strong></span>
+              </div>
+            </div>
+            
+            <button id="closeFileBtn" class="p-2 rounded-xl border border-slate-800 hover:border-red-500/40 hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-all duration-200">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- Waveform Container Box -->
+          <div class="flex-grow flex flex-col min-h-[350px] border border-slate-800/60 rounded-3xl bg-[#0a0d1b] p-6 relative shadow-inner mb-6">
+            
+            <!-- Waveform header and timeline label -->
+            <div class="flex justify-between items-center mb-4 text-xs">
+              <div class="flex items-center gap-2 font-semibold text-slate-400">
+                <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                </svg>
+                <span>Interactive Waveform Visualizer</span>
+              </div>
+
+              <!-- Zoom Controls -->
+              <div class="flex gap-2.5 items-center">
+                <button id="zoomOutBtn" class="p-1.5 rounded-lg border border-slate-800 bg-slate-900/60 hover:bg-slate-800 text-slate-400 hover:text-white transition-all duration-200" title="Zoom Out">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
+                  </svg>
+                </button>
+                <input id="zoomSlider" type="range" class="w-24 sm:w-32 accent-indigo-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg appearance-none" min="10" max="250" value="10">
+                <button id="zoomInBtn" class="p-1.5 rounded-lg border border-slate-800 bg-slate-900/60 hover:bg-slate-800 text-slate-400 hover:text-white transition-all duration-200" title="Zoom In">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m3-3H7" />
+                  </svg>
+                </button>
+              </div>
+
+              <div id="timeDisplay" class="text-slate-400 font-mono font-medium">00:00:00 / 00:00:00</div>
+            </div>
+
+            <!-- Waveform Canvas Container -->
+            <div class="flex-grow relative flex flex-col justify-center rounded-2xl bg-slate-950/40 border border-slate-900/60 overflow-hidden p-4 min-h-[160px]">
+              
+              <!-- Loading Indicator overlay -->
+              <div id="waveformLoading" class="absolute inset-0 bg-slate-950/80 z-20 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
+                <div class="w-8 h-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                <div class="text-xs text-slate-400 font-semibold tracking-wider">Decoding Audio Waveform... <span id="loadingProgress">0%</span></div>
+              </div>
+
+              <!-- WaveSurfer target elements -->
+              <div id="timeline" class="w-full mb-1"></div>
+              <div id="waveform" class="w-full h-32 relative"></div>
+            </div>
+
+            <!-- Audio Waveform Playback Controls (Without Zoom) -->
+            <div class="flex flex-wrap items-center justify-between gap-4 mt-4 shrink-0">
+              
+              <!-- Playback Buttons -->
+              <div class="flex items-center gap-2">
+                <!-- Play/Pause Button -->
+                <button id="playPauseBtn" class="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 transition-all duration-200 text-xs font-semibold">
+                  <svg id="playIcon" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  </svg>
+                  <span id="playText">Play</span>
+                </button>
+                
+                <!-- Stop Button -->
+                <button id="stopBtn" class="flex items-center justify-center p-2 rounded-xl border border-slate-800 bg-slate-900/60 hover:bg-slate-800 text-slate-400 hover:text-white transition-all duration-200">
+                  <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                  </svg>
+                </button>
+              </div>
+
+              <div class="text-[10px] text-slate-500 font-medium hidden sm:block">
+                Double-click on waveform to add split points. Drag boundaries to adjust.
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Bottom: Split points table -->
+          <div class="bg-slate-900/20 border border-slate-800/60 rounded-2xl p-4 flex-grow-0 shrink-0">
+            <div class="flex items-center justify-between mb-3">
+              <h4 class="font-['Outfit'] font-bold text-sm text-slate-200 flex items-center gap-2">
+                <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+                Interactive Chapter Splits
+              </h4>
+            </div>
+            <div class="overflow-hidden border border-slate-800/80 rounded-xl">
+              <table class="w-full text-left border-collapse text-xs text-slate-300">
+                <thead>
+                  <tr class="bg-slate-950/60 text-slate-400 border-b border-slate-800/60 font-semibold">
+                    <th class="p-3 w-10 text-center">
+                      <input type="checkbox" id="selectAllSplits" class="accent-indigo-500 rounded cursor-pointer">
+                    </th>
+                    <th class="p-3">Track Name</th>
+                    <th class="p-3">Start Time</th>
+                    <th class="p-3">End Time</th>
+                    <th class="p-3">Duration</th>
+                  </tr>
+                </thead>
+                <tbody id="splitTracksTableBody">
+                  <!-- Generated dynamically in renderer.js -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Side: Control Sidebar -->
+        <div class="w-80 border-l border-slate-800/60 bg-[#0c1020]/95 backdrop-blur-md p-6 flex flex-col justify-between shrink-0 overflow-y-auto">
+          <div>
+            <!-- Section 1: Split Method selection -->
+            <div class="mb-6">
+              <h4 class="font-['Outfit'] font-bold text-xs text-slate-400 uppercase tracking-wider mb-3">Split Mechanism</h4>
+              <div class="flex flex-col gap-2.5">
+                <!-- Method 1: Chapters (Checked) -->
+                <label class="flex items-center gap-3 p-3 rounded-xl border border-indigo-500/30 bg-indigo-500/5 cursor-pointer hover:bg-indigo-500/10 transition-all duration-200">
+                  <input type="radio" name="splitMethod" value="chapters" checked class="accent-indigo-500">
+                  <div>
+                    <div class="text-xs font-semibold text-indigo-300">Chapter Metadata</div>
+                    <div class="text-[10px] text-indigo-400/80">Uses embedded chapters (Default)</div>
+                  </div>
+                </label>
+
+                <!-- Method 2: Silence -->
+                <label class="flex items-center gap-3 p-3 rounded-xl border border-slate-800 bg-slate-900/40 cursor-pointer hover:border-slate-700/60 hover:bg-slate-800/40 transition-all duration-200">
+                  <input type="radio" name="splitMethod" value="silence" class="accent-indigo-500">
+                  <div>
+                    <div class="text-xs font-semibold text-slate-300">Silence Detection</div>
+                    <div class="text-[10px] text-slate-400">Detect silence gap fallback</div>
+                  </div>
+                </label>
+
+                <!-- Method 3: Fixed intervals -->
+                <label class="flex items-center gap-3 p-3 rounded-xl border border-slate-800 bg-slate-900/40 cursor-pointer hover:border-slate-700/60 hover:bg-slate-800/40 transition-all duration-200">
+                  <input type="radio" name="splitMethod" value="time" class="accent-indigo-500">
+                  <div>
+                    <div class="text-xs font-semibold text-slate-300">Time-based Intervals</div>
+                    <div class="text-[10px] text-slate-400">Fixed intervals (e.g. 15 mins)</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <!-- Section 2: Metadata / Output Naming Template -->
+            <div class="mb-6">
+              <h4 class="font-['Outfit'] font-bold text-xs text-slate-400 uppercase tracking-wider mb-3">Export Configuration</h4>
+              
+              <!-- Naming Template Input -->
+              <div class="mb-4">
+                <label class="block text-[11px] text-slate-400 mb-1.5 font-medium">File Name Template</label>
+                <input id="fileNameTemplate" type="text" value="[BookName] - Part [001]" class="w-full px-3 py-2 rounded-lg border border-slate-800 bg-slate-900 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/80 focus:ring-1 focus:ring-indigo-500/80 transition-all duration-200">
+                <span class="block text-[9px] text-slate-500 mt-1 font-medium">Use tokens: [BookName], [001], [ChapterTitle]</span>
+              </div>
+
+              <!-- Output folder display -->
+              <div class="mb-4">
+                <label class="block text-[11px] text-slate-400 mb-1.5 font-medium">Output Directory</label>
+                <div class="flex gap-2">
+                  <div id="outputDirDisplay" class="flex-grow px-3 py-2 rounded-lg border border-slate-800 bg-slate-900 text-[10px] text-slate-300 font-mono truncate leading-normal flex items-center">
+                    /Desktop/Split_Audiobooks
+                  </div>
+                  <button id="selectOutputDirBtn" class="px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-800 hover:bg-slate-700 text-xs font-semibold transition-all duration-200 shrink-0">
+                    ...
+                  </button>
+                </div>
+              </div>
+
+              <!-- Output Format Selection -->
+              <div class="mb-4 border-t border-slate-800/40 pt-4">
+                <label class="block text-[11px] text-slate-400 mb-1.5 font-medium">Output Format</label>
+                <select id="outputFormat" class="w-full px-3 py-2 rounded-lg border border-slate-800 bg-slate-900 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/80 focus:ring-1 focus:ring-indigo-500/80 transition-all duration-200 cursor-pointer">
+                  <option value="copy">Lossless (Same as Source)</option>
+                  <option value="mp3">Transcode to MP3 (.mp3)</option>
+                  <option value="m4a">Transcode to M4A (.m4a)</option>
+                </select>
+              </div>
+
+              <!-- Audio Bitrate Selection (Hidden by default) -->
+              <div id="bitrateContainer" class="hidden mb-2">
+                <label class="block text-[11px] text-slate-400 mb-1.5 font-medium">Audio Bitrate</label>
+                <select id="outputBitrate" class="w-full px-3 py-2 rounded-lg border border-slate-800 bg-slate-900 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/80 focus:ring-1 focus:ring-indigo-500/80 transition-all duration-200 cursor-pointer">
+                  <option value="64">64 kbps (Compact)</option>
+                  <option value="128" selected>128 kbps (Standard)</option>
+                  <option value="192">192 kbps (High Quality)</option>
+                  <option value="256">256 kbps (Premium)</option>
+                  <option value="320">320 kbps (Max Quality)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 3: Process Execution -->
+          <div class="pt-4 border-t border-slate-800/60 flex flex-col">
+            <button id="mergeSelectedBtn" class="w-full py-2.5 rounded-xl font-semibold text-xs bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/25 disabled:opacity-40 disabled:hover:bg-indigo-600/30 disabled:pointer-events-none transition-all duration-200 mb-3 flex items-center justify-center gap-2" disabled>
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 4H6a2 2 0 00-2 2v12a2 2 0 002 2h2m8-16h2a2 2 0 002 2v12a2 2 0 00-2 2h-2m-2-7h-8m8 0l-3-3m3 3l-3 3" />
+              </svg>
+              Merge Selected (0)
+            </button>
+            <button id="processBtn" class="w-full py-3 rounded-xl font-['Outfit'] font-bold text-sm bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white shadow-lg shadow-indigo-500/10 hover:shadow-indigo-500/20 active:scale-[0.98] transition-all duration-150 flex items-center justify-center gap-2">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Process Audiobook
+            </button>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer Versions Display -->
+    <footer class="h-8 flex items-center justify-center border-t border-slate-800/40 bg-slate-950/80 text-[10px] font-semibold text-slate-500 gap-6 shrink-0 z-10">
+      <span id="el-ver">Electron: v...</span>
+      <span id="ch-ver">Chrome: v...</span>
+      <span id="nd-ver">Node: v...</span>
+    </footer>
+
+    <!-- Custom Dialog Modal (Hidden by default) -->
+    <div id="modalOverlay" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center opacity-0 pointer-events-none transition-all duration-300">
+      <div class="w-full max-w-lg bg-[#0c1020] border border-slate-800 rounded-3xl p-6 shadow-2xl flex flex-col max-h-[80vh] min-h-0 overflow-hidden">
+        <h3 id="modalTitle" class="font-['Outfit'] font-bold text-lg text-slate-100 mb-3">Processing Audiobook</h3>
+        
+        <!-- Standard Content Container -->
+        <div id="modalContent" class="text-slate-300 text-xs font-medium overflow-y-auto mb-6 flex-grow pr-2 min-h-0">
+          <!-- Text content injected dynamically -->
+        </div>
+
+        <!-- Progress Container (Hidden by default) -->
+        <div id="modalProgressContainer" class="hidden mb-6 pr-2 shrink-0">
+          <div class="flex items-center justify-between text-xs font-semibold text-slate-300 mb-2">
+            <span id="splitProgressText">Preparing splits...</span>
+            <span id="splitProgressPercent">0%</span>
+          </div>
+          <div class="w-full h-2 rounded-full bg-slate-950 overflow-hidden border border-slate-800">
+            <div id="splitProgressBar" class="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 rounded-full transition-all duration-150" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div id="modalActions" class="flex justify-end gap-3 shrink-0">
+          <button id="modalCancelBtn" class="px-5 py-2.5 rounded-xl font-semibold text-xs border border-slate-800 hover:bg-slate-800 text-slate-300 transition-all duration-200">
+            Cancel
+          </button>
+          <button id="modalCloseBtn" class="px-5 py-2.5 rounded-xl font-semibold text-xs bg-indigo-500 hover:bg-indigo-600 text-white transition-all duration-200">
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/renderer.js"></script>
+  </body>
+</html>

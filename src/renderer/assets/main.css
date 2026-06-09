@@ -1,0 +1,82 @@
+@import './base.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbars for a premium dark feel */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a; /* Slate 900 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155; /* Slate 700 */
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569; /* Slate 600 */
+}
+
+body {
+  background-color: #0b0f19; /* Slate 950 fallback */
+  background-image: radial-gradient(at 50% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+                    radial-gradient(at 0% 100%, rgba(16, 185, 129, 0.05) 0px, transparent 50%);
+  background-attachment: fixed;
+}
+
+/* Custom styling for WaveSurfer regions and drag-resize handles */
+.wavesurfer-region {
+  border-left: 2px solid rgba(99, 102, 241, 0.5) !important;
+  border-right: 2px solid rgba(99, 102, 241, 0.5) !important;
+  background-color: rgba(99, 102, 241, 0.06) !important;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+/* Alternating styling for visual track segmentation */
+.wavesurfer-region:nth-of-type(even) {
+  border-left-color: rgba(16, 185, 129, 0.5) !important;
+  border-right-color: rgba(16, 185, 129, 0.5) !important;
+  background-color: rgba(16, 185, 129, 0.06) !important;
+}
+
+.wavesurfer-region:hover {
+  background-color: rgba(99, 102, 241, 0.12) !important;
+}
+
+.wavesurfer-region:nth-of-type(even):hover {
+  background-color: rgba(16, 185, 129, 0.12) !important;
+}
+
+.wavesurfer-handle {
+  width: 6px !important;
+  opacity: 0;
+  background-color: #6366f1 !important; /* Indigo 500 */
+  transition: opacity 0.2s ease, width 0.2s ease, background-color 0.2s ease;
+}
+
+.wavesurfer-region:nth-of-type(even) .wavesurfer-handle {
+  background-color: #10b981 !important; /* Emerald 500 */
+}
+
+.wavesurfer-region:hover .wavesurfer-handle {
+  opacity: 0.8;
+}
+
+.wavesurfer-handle:hover {
+  width: 8px !important;
+  opacity: 1 !important;
+}
+
+/* Highlight style for merged tracks */
+.merged-track-highlight {
+  color: #34d399 !important; /* Tailwind emerald-400 */
+  font-weight: 700 !important; /* Tailwind font-bold */
+}
+
+
