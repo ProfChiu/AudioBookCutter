@@ -1,6 +1,31 @@
-node_modules
-dist
-out
+# Dependency directories
+node_modules/
+
+# Production build outputs
+dist/
+out/
+build/
+
+# IDE / Editor folders
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS metadata
 .DS_Store
-.eslintcache
+Thumbs.db
+
+# Logs & Cache
 *.log*
+.eslintcache
+.npm/
+.yarn/
+
+# Ignore all markdown files except README.md
+*.md
+!README.md
+
