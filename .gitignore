@@ -15,6 +15,13 @@ build/
 *.sln
 *.sw?
 
+# Audiobook test media (large binaries — keep out of the repo)
+*.mp3
+*.m4a
+*.m4b
+*.epub
+books/
+
 # OS metadata
 .DS_Store
 Thumbs.db

@@ -7,6 +7,8 @@ let currentFile = null;
 let currentFilePath = '';
 let currentChapters = [];
 let fileMetadata = null;
+let epubData = null; // { path, title, chapters: [{ title, words }] }
+let pendingAutoSplits = null; // splits to render once the waveform is ready (landing flow)
 let wavesurfer = null;
 let wsRegions = null;
 
@@ -105,70 +107,335 @@ function initApp() {
     });
   }
 
-  setupDropzone();
+  setupLandingScreen();
   setupWorkspaceControls();
   setupSplitMethodListeners();
 }
 
-function setupDropzone() {
-  const dropzone = document.getElementById('dropzone');
-  const browseBtn = dropzone.querySelector('button');
-  
-  // Create hidden file input for browsing
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = '.mp3,.m4a,.m4b';
-  fileInput.className = 'hidden';
-  document.body.appendChild(fileInput);
+// Landing-screen state: the audiobook + EPUB the user is about to process.
+let landingMp3File = null;
+let landingMp3Path = '';
+let landingMp3Meta = null;
+let landingEpubPath = '';
+let landingEpubTitle = '';
+let landingEpubChapters = null;
 
-  // Browse files click handler
-  browseBtn.addEventListener('click', (e) => {
-    e.stopPropagation(); // Prevent triggering dropzone click
-    fileInput.click();
-  });
+function setupLandingScreen() {
+  setupDropCard('mp3Drop', ['mp3', 'm4a', 'm4b'], 'indigo', handleLandingMp3);
+  setupDropCard('epubDrop', ['epub'], 'emerald', handleLandingEpub);
 
-  dropzone.addEventListener('click', () => {
-    fileInput.click();
-  });
+  const preciseCb = document.getElementById('landingPrecise');
+  if (preciseCb) {
+    preciseCb.addEventListener('change', () => {
+      updateLandingWhisperStatus();
+      updateEstimate();
+    });
+  }
 
-  // Handle selected file from input
-  fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-      handleFileSelection(e.target.files[0]);
-    }
-  });
-
-  // Drag and drop event listeners
-  dropzone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropzone.classList.remove('border-slate-700/60', 'bg-[#0f1428]/40');
-    dropzone.classList.add('border-indigo-500/80', 'bg-indigo-500/5', 'shadow-indigo-500/10');
-  });
-
-  dropzone.addEventListener('dragleave', () => {
-    resetDropzoneStyling();
-  });
-
-  dropzone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    resetDropzoneStyling();
-
-    if (e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      const ext = file.name.split('.').pop().toLowerCase();
-      if (['mp3', 'm4a', 'm4b'].includes(ext)) {
-        handleFileSelection(file);
-      } else {
-        showModal('Unsupported Format', 'Unsupported file format. Please drop an MP3, M4A, or M4B file.');
-      }
-    }
-  });
+  const startBtn = document.getElementById('startProcessingBtn');
+  if (startBtn) {
+    startBtn.addEventListener('click', startProcessing);
+  }
 }
 
-function resetDropzoneStyling() {
-  const dropzone = document.getElementById('dropzone');
-  dropzone.classList.remove('border-indigo-500/80', 'bg-indigo-500/5', 'shadow-indigo-500/10');
-  dropzone.classList.add('border-slate-700/60', 'bg-[#0f1428]/40');
+/**
+ * Wires a drop/click file card: a hidden input for browsing plus drag-and-drop,
+ * validating extension before invoking the handler.
+ */
+function setupDropCard(cardId, exts, color, onFile) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = exts.map((e) => '.' + e).join(',');
+  input.className = 'hidden';
+  document.body.appendChild(input);
+
+  // Highlight via inline style (avoids relying on dynamically-named Tailwind
+  // classes, which the build's class scanner would not generate).
+  const accent = color === 'emerald' ? '#10b981' : '#6366f1';
+  const setHighlight = (on) => {
+    card.style.borderColor = on ? accent : '';
+    card.style.backgroundColor = on ? 'rgba(99,102,241,0.05)' : '';
+  };
+
+  card.addEventListener('click', () => input.click());
+  input.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) validateAndHandle(e.target.files[0]);
+    input.value = '';
+  });
+
+  card.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    setHighlight(true);
+  });
+  card.addEventListener('dragleave', () => setHighlight(false));
+  card.addEventListener('drop', (e) => {
+    e.preventDefault();
+    setHighlight(false);
+    if (e.dataTransfer.files.length > 0) validateAndHandle(e.dataTransfer.files[0]);
+  });
+
+  function validateAndHandle(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!exts.includes(ext)) {
+      showModal('Unsupported Format', `Please choose a ${exts.map((e) => '.' + e).join(', ')} file.`);
+      return;
+    }
+    onFile(file);
+  }
+}
+
+async function handleLandingMp3(file) {
+  landingMp3File = file;
+  landingMp3Path = window.api.getPathForFile(file);
+
+  const prompt = document.getElementById('mp3Prompt');
+  const info = document.getElementById('mp3Info');
+  const nameEl = document.getElementById('mp3Name');
+  const metaEl = document.getElementById('mp3Meta');
+  const check = document.getElementById('mp3Check');
+
+  prompt.classList.add('hidden');
+  info.classList.remove('hidden');
+  info.classList.add('flex');
+  nameEl.innerText = file.name;
+  metaEl.innerText = 'Analyzing…';
+
+  const res = await window.electron.ipcRenderer.invoke('analyze-file', landingMp3Path);
+  if (!res.success) {
+    metaEl.innerText = 'Could not read audio';
+    landingMp3Meta = null;
+  } else {
+    landingMp3Meta = res.metadata;
+    const sizeMB = (res.metadata.size / (1024 * 1024)).toFixed(0);
+    metaEl.innerText = `${formatDuration(res.metadata.duration)} • ${sizeMB} MB`;
+    if (check) {
+      check.classList.remove('hidden');
+      check.classList.add('flex');
+    }
+  }
+
+  updateEstimate();
+  updateStartEnabled();
+}
+
+async function handleLandingEpub(file) {
+  landingEpubPath = window.api.getPathForFile(file);
+
+  const prompt = document.getElementById('epubPrompt');
+  const info = document.getElementById('epubInfo');
+  const nameEl = document.getElementById('epubName');
+  const metaEl = document.getElementById('epubMeta');
+  const check = document.getElementById('epubCheck');
+
+  prompt.classList.add('hidden');
+  info.classList.remove('hidden');
+  info.classList.add('flex');
+  nameEl.innerText = file.name;
+  metaEl.innerText = 'Reading chapters…';
+
+  const res = await window.api.analyzeEpub(landingEpubPath);
+  if (!res || !res.success) {
+    metaEl.innerText = (res && res.error) ? 'No chapters found' : 'Could not read EPUB';
+    landingEpubChapters = null;
+  } else {
+    landingEpubChapters = res.chapters;
+    landingEpubTitle = res.title;
+    metaEl.innerText = `${res.chapters.length} chapters`;
+    if (check) {
+      check.classList.remove('hidden');
+      check.classList.add('flex');
+    }
+  }
+
+  updateEstimate();
+  updateStartEnabled();
+}
+
+function updateStartEnabled() {
+  const btn = document.getElementById('startProcessingBtn');
+  if (btn) btn.disabled = !(landingMp3Meta && landingEpubChapters);
+}
+
+/**
+ * Shows a good-faith processing-time estimate based on audio duration and the
+ * chosen options. Silence detection scans the whole file once; Whisper
+ * alignment transcribes it (~60x realtime), which dominates when enabled.
+ */
+function updateEstimate() {
+  const line = document.getElementById('estimateLine');
+  if (!line) return;
+
+  if (!landingMp3Meta) {
+    line.innerText = 'Add both files to estimate';
+    return;
+  }
+
+  const d = landingMp3Meta.duration; // seconds
+  const precise = document.getElementById('landingPrecise')?.checked;
+
+  // Per-stage rough costs (seconds). Ranges account for hardware variance.
+  let lowSec = 8 + d / 60; // silence scan + mapping (decode pass)
+  let highSec = 15 + d / 35;
+  if (precise) {
+    lowSec += d / 75; // whisper transcription, fast end
+    highSec += d / 45; // whisper transcription, slow end
+  }
+
+  line.innerHTML = `<span class="text-slate-100">~ ${formatEstimateRange(lowSec, highSec)}</span>${precise ? '' : ' <span class="text-[10px] text-slate-500 font-normal">(enable Whisper for exact cuts)</span>'}`;
+}
+
+function formatEstimateRange(lowSec, highSec) {
+  const toUnit = (s) => (s < 90 ? { v: Math.max(1, Math.round(s)), u: 'sec' } : { v: Math.round(s / 60), u: 'min' });
+  const lo = toUnit(lowSec);
+  const hi = toUnit(highSec);
+  if (lo.u === hi.u) {
+    return lo.v === hi.v ? `${lo.v} ${lo.u}` : `${lo.v}–${hi.v} ${hi.u}`;
+  }
+  return `${lo.v} ${lo.u}–${hi.v} ${hi.u}`;
+}
+
+async function updateLandingWhisperStatus() {
+  const statusEl = document.getElementById('landingWhisperStatus');
+  const cb = document.getElementById('landingPrecise');
+  if (!statusEl || !cb) return;
+
+  if (!cb.checked) {
+    statusEl.classList.add('hidden');
+    return;
+  }
+  statusEl.classList.remove('hidden');
+  statusEl.innerHTML = '<span class="text-slate-400">Checking whisper.cpp…</span>';
+
+  const info = window.api.checkWhisper ? await window.api.checkWhisper() : null;
+  if (!info || !info.available) {
+    statusEl.innerHTML = '<span class="text-amber-400">whisper.cpp not found — install with <span class="font-mono">brew install whisper-cpp</span>. Processing will use the estimate instead.</span>';
+  } else if (!info.modelPresent) {
+    statusEl.innerHTML = '<span class="text-slate-400">Ready — model (~150 MB) downloads on first run.</span>';
+  } else {
+    statusEl.innerHTML = '<span class="text-emerald-400">✓ whisper.cpp ready.</span>';
+  }
+}
+
+function setLandingProgress(percent, text) {
+  const bar = document.getElementById('landingProgressBar');
+  const pct = document.getElementById('landingProgressPercent');
+  const txt = document.getElementById('landingProgressText');
+  if (bar && percent != null) bar.style.width = `${percent}%`;
+  if (pct) pct.innerText = percent != null ? `${Math.round(percent)}%` : '';
+  if (txt && text) txt.innerText = text;
+}
+
+/**
+ * Runs the full auto pipeline from the landing screen with an inline progress
+ * bar — map chapters (+ silence), optionally Whisper-align — then opens the
+ * workspace with the chapters laid out for review and export.
+ */
+async function startProcessing() {
+  if (!(landingMp3Meta && landingEpubChapters)) return;
+
+  const startBtn = document.getElementById('startProcessingBtn');
+  const progress = document.getElementById('landingProgress');
+  if (startBtn) startBtn.disabled = true;
+  if (progress) progress.classList.remove('hidden');
+
+  const precise = document.getElementById('landingPrecise')?.checked;
+
+  // Promote landing selections to the active workspace state.
+  currentFile = landingMp3File;
+  currentFilePath = landingMp3Path;
+  fileMetadata = landingMp3Meta;
+  currentChapters = landingMp3Meta.chapters || [];
+  epubData = { path: landingEpubPath, title: landingEpubTitle, chapters: landingEpubChapters };
+
+  try {
+    // 1) Proportional mapping + silence detection.
+    setLandingProgress(8, 'Detecting silence & mapping chapters…');
+    const mapRes = await window.api.getAutoSplitPoints({
+      filePath: currentFilePath,
+      chapters: landingEpubChapters,
+      duration: fileMetadata.duration,
+      snapToSilence: true,
+      snapWindow: 90
+    });
+    if (!mapRes || !mapRes.success) {
+      throw new Error((mapRes && mapRes.error) || 'Failed to map chapters.');
+    }
+    let finalSplits = mapRes.splits;
+
+    // 2) Optional Whisper forced alignment (the long stage; reports progress).
+    if (precise) {
+      let cleanup = null;
+      if (window.api.onAlignProgress) {
+        cleanup = window.api.onAlignProgress((d) => {
+          if (d.status === 'downloading-model') {
+            setLandingProgress(20, `Downloading Whisper model… ${d.percent}%`);
+          } else if (d.status === 'aligning' && d.phase === 'transcribing') {
+            // Map transcription 0–100% into the 25–90% band of the bar.
+            setLandingProgress(25 + (d.percent || 0) * 0.65, `Transcribing audio… ${d.percent}% (part ${d.chunk}/${d.chunks})`);
+          } else if (d.status === 'aligning') {
+            setLandingProgress(92, `Matching chapter ${d.current}/${d.total}…`);
+          }
+        });
+      }
+      const alignRes = await window.api.alignChapters({
+        filePath: currentFilePath,
+        splits: finalSplits,
+        chapters: landingEpubChapters,
+        duration: fileMetadata.duration
+      });
+      if (cleanup) cleanup();
+
+      if (alignRes && alignRes.success) {
+        finalSplits = alignRes.splits;
+        setLandingProgress(95, `Aligned ${alignRes.aligned}/${alignRes.total} chapters`);
+      } else {
+        // Non-fatal: keep the proportional estimate.
+        showModal('Alignment Unavailable', ((alignRes && alignRes.error) || 'Whisper alignment failed.') + ' Continuing with the estimated boundaries.');
+      }
+    }
+
+    setLandingProgress(100, 'Opening workspace…');
+
+    // 3) Reflect settings in the workspace sidebar, then open it for review.
+    syncWorkspaceAutoUi(precise);
+    pendingAutoSplits = finalSplits;
+    transitionToScreen('workspace');
+    populateFileHeader(landingMp3File, fileMetadata, currentFilePath);
+    initWaveSurfer(landingMp3File, fileMetadata.duration);
+  } catch (err) {
+    showModal('Processing Error', err.message);
+  } finally {
+    if (progress) progress.classList.add('hidden');
+    setLandingProgress(0, '');
+    if (startBtn) startBtn.disabled = false;
+  }
+}
+
+/**
+ * Mirrors the landing choices onto the workspace Auto panel so a user who keeps
+ * adjusting sees consistent state (Auto method selected, EPUB loaded, etc.).
+ */
+function syncWorkspaceAutoUi(precise) {
+  const autoRadio = document.querySelector('input[value="auto"]');
+  if (autoRadio) autoRadio.checked = true;
+  toggleEpubPanel(true);
+
+  const epubStatus = document.getElementById('epubStatus');
+  if (epubStatus && landingEpubChapters) {
+    const name = (landingEpubPath.split(/[\\/]/).pop()) || 'EPUB';
+    epubStatus.innerHTML = `<span class="text-emerald-300 font-semibold">&#10003; ${landingEpubChapters.length} chapters</span> from <span class="text-slate-300" title="${name}">${name}</span>`;
+  }
+
+  const preciseCb = document.getElementById('preciseAlign');
+  if (preciseCb) preciseCb.checked = !!precise;
+
+  const templateInput = document.getElementById('fileNameTemplate');
+  if (templateInput && templateInput.value.trim() === '[BookName] - Part [001]') {
+    templateInput.value = '[001] - [ChapterTitle]';
+  }
 }
 
 function setupWorkspaceControls() {
@@ -182,92 +449,286 @@ function setupWorkspaceControls() {
     currentFilePath = '';
     currentChapters = [];
     fileMetadata = null;
-  });
+    epubData = null;
 
-  processBtn.addEventListener('click', () => {
-    if (currentFile && wsRegions) {
-      const sorted = wsRegions.getRegions().sort((a, b) => a.start - b.start);
-      const outputSplits = sorted.map((r, i) => ({
-        part: i + 1,
-        title: r.data?.title || `Part ${String(i + 1).padStart(2, '0')}`,
-        start: r.start.toFixed(3),
-        end: r.end.toFixed(3),
-        duration: (r.end - r.start).toFixed(3)
-      }));
-      showConfirmSplitsModal(outputSplits);
+    // Reset Auto/EPUB UI back to its initial state.
+    toggleEpubPanel(false);
+    const epubStatus = document.getElementById('epubStatus');
+    if (epubStatus) {
+      epubStatus.innerHTML = 'No EPUB selected. Chapter timing is estimated from text length and snapped to silence — review before exporting.';
     }
   });
+
+  processBtn.addEventListener('click', () => triggerProcess(false));
+}
+
+/**
+ * Gathers the current waveform regions and opens the confirm/export flow.
+ * When autoStart is true, the export begins immediately without waiting for the
+ * user to click "Start Splitting" (used by Auto mode's "split immediately").
+ */
+function triggerProcess(autoStart) {
+  if (!currentFile || !wsRegions) return;
+
+  const sorted = wsRegions.getRegions().sort((a, b) => a.start - b.start);
+  const outputSplits = sorted.map((r, i) => ({
+    part: i + 1,
+    title: r.data?.title || `Part ${String(i + 1).padStart(2, '0')}`,
+    start: r.start.toFixed(3),
+    end: r.end.toFixed(3),
+    duration: (r.end - r.start).toFixed(3)
+  }));
+
+  showConfirmSplitsModal(outputSplits);
+
+  if (autoStart) {
+    handleModalConfirmClick();
+  }
 }
 
 function setupSplitMethodListeners() {
   const radios = document.querySelectorAll('input[name="splitMethod"]');
   radios.forEach(radio => {
     radio.addEventListener('change', async (e) => {
-      if (!currentFile || !fileMetadata) return;
       const method = e.target.value;
-      await applySplitMethod(method);
+      toggleEpubPanel(method === 'auto');
+      if (!currentFile || !fileMetadata) return;
+      if (method === 'auto') {
+        await handleAutoMethod();
+      } else {
+        await applySplitMethod(method);
+      }
     });
   });
-}
 
-async function handleFileSelection(file) {
-  try {
-    currentFile = file;
+  const selectEpubBtn = document.getElementById('selectEpubBtn');
+  if (selectEpubBtn) {
+    selectEpubBtn.addEventListener('click', chooseEpub);
+  }
 
-    // Retrieve absolute file path via Electron's secure webUtils
-    currentFilePath = window.api.getPathForFile(file);
-    console.log('Ingesting file path:', currentFilePath);
+  // Re-map when the snap window changes (silence detection is cached per file,
+  // so changing the window after the first scan is fast).
+  const snapSelect = document.getElementById('snapWindow');
+  if (snapSelect) {
+    snapSelect.addEventListener('change', async () => {
+      const autoSelected = document.querySelector('input[value="auto"]')?.checked;
+      if (autoSelected && epubData && currentFile && fileMetadata) {
+        await applyAutoSplits();
+      }
+    });
+  }
 
-    if (!currentFilePath) {
-      throw new Error("Could not retrieve the absolute file path from the file object. Ensure the file is a valid local file.");
-    }
-
-    // Transition UI screen
-    transitionToScreen('workspace');
-
-    // Load and analyze file
-    await loadAndAnalyzeFile(file, currentFilePath);
-  } catch (err) {
-    showModal('Error Loading File', "Error loading file: " + err.message);
-    console.error(err);
+  // Surface whisper.cpp availability when precise alignment is toggled on.
+  const preciseCb = document.getElementById('preciseAlign');
+  if (preciseCb) {
+    preciseCb.addEventListener('change', updateWhisperStatus);
   }
 }
 
-async function loadAndAnalyzeFile(file, filePath) {
-  const loadingOverlay = document.getElementById('waveformLoading');
-  const progressText = document.getElementById('loadingProgress');
-  
-  loadingOverlay.classList.remove('opacity-0', 'pointer-events-none');
-  loadingOverlay.classList.add('opacity-100');
-  progressText.innerText = 'Analyzing metadata...';
-  
-  document.getElementById('statusText').innerText = 'Analyzing file...';
+async function updateWhisperStatus() {
+  const statusEl = document.getElementById('whisperStatus');
+  const cb = document.getElementById('preciseAlign');
+  if (!statusEl || !cb) return;
 
-  // Invoke backend metadata analysis
-  const res = await window.electron.ipcRenderer.invoke('analyze-file', filePath);
-  if (!res.success) {
-    showModal('Analysis Error', 'Failed to analyze audio file: ' + res.error);
-    loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
-    transitionToScreen('dropzone');
+  if (!cb.checked) {
+    statusEl.classList.add('hidden');
     return;
   }
 
-  fileMetadata = res.metadata;
-  currentChapters = res.metadata.chapters;
-  
-  // Render details in UI
-  const sizeInMB = (res.metadata.size / (1024 * 1024)).toFixed(1);
+  statusEl.classList.remove('hidden');
+  statusEl.innerHTML = 'Checking whisper.cpp&hellip;';
+
+  const info = window.api.checkWhisper ? await window.api.checkWhisper() : null;
+  if (!info || !info.available) {
+    statusEl.innerHTML = '<span class="text-amber-400">whisper.cpp not found — install with <span class="font-mono">brew install whisper-cpp</span></span>';
+  } else if (!info.modelPresent) {
+    statusEl.innerHTML = '<span class="text-slate-400">Ready — the base.en model (~150&nbsp;MB) downloads on first run.</span>';
+  } else {
+    statusEl.innerHTML = '<span class="text-emerald-400">&#10003; whisper.cpp ready (base.en installed).</span>';
+  }
+}
+
+/**
+ * Refines the already-rendered proportional splits with Whisper forced
+ * alignment, streaming progress into the waveform overlay. Returns the refined
+ * splits (or the originals if alignment fails — never worse than the input).
+ */
+async function runPreciseAlignment(splits) {
+  const loadingOverlay = document.getElementById('waveformLoading');
+  const progressText = document.getElementById('loadingProgress');
+  loadingOverlay.classList.remove('opacity-0', 'pointer-events-none');
+  loadingOverlay.classList.add('opacity-100');
+  progressText.innerText = 'Precise alignment: preparing Whisper…';
+
+  let cleanup = null;
+  if (window.api.onAlignProgress) {
+    cleanup = window.api.onAlignProgress((d) => {
+      if (d.status === 'downloading-model') {
+        progressText.innerText = `Downloading Whisper model… ${d.percent}%`;
+      } else if (d.status === 'aligning') {
+        if (d.phase === 'transcribing') {
+          progressText.innerText = `Transcribing audio… ${d.percent}% (part ${d.chunk}/${d.chunks})`;
+        } else {
+          const tag = d.phase === 'matched' ? ' ✓' : d.phase === 'fallback' ? ' (kept estimate)' : '…';
+          progressText.innerText = `Matching chapter ${d.current}/${d.total}: ${d.title}${tag}`;
+        }
+      } else if (d.status === 'complete') {
+        progressText.innerText = `Aligned ${d.aligned}/${d.total} chapters`;
+      }
+    });
+  }
+
+  const res = await window.api.alignChapters({
+    filePath: currentFilePath,
+    splits,
+    chapters: epubData.chapters,
+    duration: fileMetadata.duration
+  });
+
+  if (cleanup) cleanup();
+  loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
+
+  if (!res || !res.success) {
+    showModal('Alignment Unavailable', ((res && res.error) || 'Whisper alignment failed.') + ' Keeping the proportional estimate.');
+    return splits;
+  }
+
+  renderSplitsOnWaveform(res.splits);
+  const statusText = document.getElementById('statusText');
+  if (statusText) {
+    statusText.innerText = `✓ ${res.aligned}/${res.total} chapter boundaries aligned with Whisper`;
+  }
+  return res.splits;
+}
+
+function toggleEpubPanel(show) {
+  const panel = document.getElementById('epubPanel');
+  if (!panel) return;
+  if (show) {
+    panel.classList.remove('hidden');
+    panel.classList.add('flex');
+  } else {
+    panel.classList.add('hidden');
+    panel.classList.remove('flex');
+  }
+}
+
+async function handleAutoMethod() {
+  // If we already have parsed an EPUB, re-map. Otherwise prompt the user to pick one.
+  if (epubData && epubData.chapters && epubData.chapters.length > 0) {
+    await applyAutoSplits();
+  } else {
+    await chooseEpub();
+  }
+}
+
+async function chooseEpub() {
+  const statusEl = document.getElementById('epubStatus');
+  if (!window.api || !window.api.selectEpubFile) return;
+
+  const path = await window.api.selectEpubFile();
+  if (!path) return;
+
+  if (statusEl) statusEl.innerHTML = 'Reading EPUB chapters&hellip;';
+
+  const res = await window.api.analyzeEpub(path);
+  if (!res || !res.success) {
+    epubData = null;
+    if (statusEl) {
+      statusEl.innerHTML = `<span class="text-red-400">${(res && res.error) || 'Failed to read EPUB.'}</span>`;
+    }
+    return;
+  }
+
+  epubData = { path, title: res.title, chapters: res.chapters };
+
+  const fileName = path.split(/[\\/]/).pop();
+  if (statusEl) {
+    statusEl.innerHTML = `<span class="text-emerald-300 font-semibold">&#10003; ${res.chapters.length} chapters</span> from <span class="text-slate-300" title="${fileName}">${fileName}</span>`;
+  }
+
+  // Ensure the Auto radio reflects the active state and the panel is visible.
+  const autoRadio = document.querySelector('input[value="auto"]');
+  if (autoRadio) autoRadio.checked = true;
+  toggleEpubPanel(true);
+
+  if (currentFile && fileMetadata) {
+    await applyAutoSplits();
+  }
+}
+
+async function applyAutoSplits() {
+  if (!wavesurfer || !wsRegions || !fileMetadata || !epubData) return;
+
+  // Read auto-mode options.
+  const snapSelect = document.getElementById('snapWindow');
+  const snapWindow = snapSelect ? Number(snapSelect.value) : 90;
+  const snapToSilence = snapWindow > 0;
+  const autoStartCb = document.getElementById('autoSplitImmediately');
+  const autoStart = !!(autoStartCb && autoStartCb.checked);
+
+  const loadingOverlay = document.getElementById('waveformLoading');
+  const progressText = document.getElementById('loadingProgress');
+  loadingOverlay.classList.remove('opacity-0', 'pointer-events-none');
+  loadingOverlay.classList.add('opacity-100');
+  progressText.innerText = snapToSilence
+    ? 'Mapping EPUB chapters & detecting silence (this can take a moment)...'
+    : 'Mapping EPUB chapters to audio...';
+
+  const res = await window.api.getAutoSplitPoints({
+    filePath: currentFilePath,
+    chapters: epubData.chapters,
+    duration: fileMetadata.duration,
+    snapToSilence,
+    snapWindow
+  });
+
+  loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
+
+  if (!res || !res.success) {
+    showModal('Auto Split Error', 'Failed to compute chapter splits: ' + ((res && res.error) || 'Unknown error.'));
+    return;
+  }
+
+  renderSplitsOnWaveform(res.splits);
+
+  const statusText = document.getElementById('statusText');
+  if (statusText) {
+    statusText.innerText = `✓ ${res.splits.length} chapters mapped from EPUB${res.snappedToSilence ? ' (snapped to silence)' : ''}`;
+  }
+
+  // In Auto mode, prefer chapter-title naming when the template is still default.
+  const templateInput = document.getElementById('fileNameTemplate');
+  if (templateInput && templateInput.value.trim() === '[BookName] - Part [001]') {
+    templateInput.value = '[001] - [ChapterTitle]';
+  }
+
+  // Optional: refine the proportional boundaries with Whisper forced alignment.
+  const preciseCb = document.getElementById('preciseAlign');
+  if (preciseCb && preciseCb.checked) {
+    await runPreciseAlignment(res.splits);
+  }
+
+  // "Split immediately" — skip the editor review and jump straight to export.
+  if (autoStart) {
+    triggerProcess(true);
+  }
+}
+
+/**
+ * Fills the workspace file-header (name, size, format, duration) from probed
+ * metadata. Used by the landing "Start Processing" flow.
+ */
+function populateFileHeader(file, metadata, filePath) {
+  const sizeInMB = (metadata.size / (1024 * 1024)).toFixed(1);
   const ext = filePath.split('.').pop().toUpperCase();
-  const kbps = Math.round(res.metadata.bitrate / 1000);
+  const kbps = Math.round(metadata.bitrate / 1000);
 
   document.getElementById('fileName').innerText = file.name;
   document.getElementById('fileSize').innerText = `${sizeInMB} MB`;
   document.getElementById('fileTypeBadge').innerText = ext;
   document.getElementById('fileBitrate').innerText = `${kbps} kbps (${ext})`;
-  document.getElementById('fileDuration').innerText = formatDuration(res.metadata.duration);
-
-  // Load wave audio visualizer
-  initWaveSurfer(file, res.metadata.duration);
+  document.getElementById('fileDuration').innerText = formatDuration(metadata.duration);
 }
 
 function initWaveSurfer(file, duration) {
@@ -342,6 +803,17 @@ function initWaveSurfer(file, duration) {
     // Update duration display
     const duration = wavesurfer.getDuration();
     document.getElementById('fileDuration').innerText = formatDuration(duration);
+
+    // Landing "Start Processing" flow: chapters were already computed (and
+    // possibly Whisper-aligned); just lay them out for review.
+    if (pendingAutoSplits) {
+      const splits = pendingAutoSplits;
+      pendingAutoSplits = null;
+      renderSplitsOnWaveform(splits);
+      setupPlaybackControls();
+      document.getElementById('statusText').innerText = `✓ ${splits.length} chapters ready for review`;
+      return;
+    }
 
     // Initial split points calculation based on chapter availability
     const chaptersRadio = document.querySelector('input[value="chapters"]');
@@ -442,12 +914,8 @@ async function applySplitMethod(method) {
     return;
   }
 
-  // Clear existing regions
-  wsRegions.clearRegions();
-
-  // Populate new regions
   const splits = res.splits;
-  
+
   const statusText = document.getElementById('statusText');
   if (method === 'chapters') {
     statusText.innerText = `✓ ${splits.length} chapters loaded`;
@@ -456,6 +924,19 @@ async function applySplitMethod(method) {
   } else {
     statusText.innerText = `✓ ${splits.length} time intervals generated`;
   }
+
+  renderSplitsOnWaveform(splits);
+}
+
+/**
+ * Clears the waveform and repopulates it with the supplied split segments,
+ * carrying each segment's title into the region data. Shared by every split
+ * method (chapters / silence / time / auto-from-EPUB).
+ */
+function renderSplitsOnWaveform(splits) {
+  if (!wsRegions) return;
+
+  wsRegions.clearRegions();
 
   splits.forEach((split) => {
     const r = wsRegions.addRegion({

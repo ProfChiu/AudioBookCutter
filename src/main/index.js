@@ -4,7 +4,14 @@ import fs from 'fs'
 import ffmpeg from 'fluent-ffmpeg'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { getAudioMetadata, getSplitPoints } from './analyzer.js'
+import { getAudioMetadata, getSplitPoints, detectSilenceGaps, computeChapterSplits } from './analyzer.js'
+import { parseEpubChapters } from './epub.js'
+import { checkWhisper, ensureModel, findWhisperBinary, getModelPath } from './whisper.js'
+import { alignChapters } from './align.js'
+
+// Caches detected silence gaps keyed by audio file path, so re-mapping chapters
+// with a different snap window doesn't rescan the (potentially huge) audio file.
+const silenceCache = new Map()
 
 function createWindow() {
   // Create the browser window.
@@ -77,6 +84,118 @@ app.whenReady().then(() => {
       return { success: true, splits }
     } catch (err) {
       console.error('IPC get-split-points error:', err)
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Select EPUB File IPC Handler
+  ipcMain.handle('select-epub-file', async (event) => {
+    try {
+      const window = BrowserWindow.fromWebContents(event.sender)
+      const result = await dialog.showOpenDialog(window, {
+        title: 'Select EPUB Book',
+        properties: ['openFile'],
+        filters: [{ name: 'EPUB Books', extensions: ['epub'] }]
+      })
+      if (result.canceled || result.filePaths.length === 0) {
+        return null
+      }
+      return result.filePaths[0]
+    } catch (err) {
+      console.error('IPC select-epub-file error:', err)
+      return null
+    }
+  })
+
+  // Parse EPUB chapters IPC Handler
+  ipcMain.handle('analyze-epub', async (event, epubPath) => {
+    try {
+      const result = await parseEpubChapters(epubPath)
+      return { success: true, ...result }
+    } catch (err) {
+      console.error('IPC analyze-epub error:', err)
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Auto Chapter Splits IPC Handler (EPUB-driven proportional + silence snap)
+  ipcMain.handle('auto-split-points', async (event, { filePath, chapters, duration, snapToSilence = true, snapWindow = 90 }) => {
+    try {
+      let silences = []
+      if (snapToSilence) {
+        // Silence detection scans the whole file (slow). Cache per file so that
+        // re-mapping with a different snap window is instant.
+        if (silenceCache.has(filePath)) {
+          silences = silenceCache.get(filePath)
+        } else {
+          try {
+            silences = await detectSilenceGaps(filePath)
+            silenceCache.set(filePath, silences)
+          } catch (e) {
+            console.error('Silence detection failed during auto-split, using proportional only:', e)
+          }
+        }
+      }
+      const splits = computeChapterSplits(chapters, duration, silences, snapWindow)
+      return { success: true, splits, snappedToSilence: snapToSilence && silences.length > 0 }
+    } catch (err) {
+      console.error('IPC auto-split-points error:', err)
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Whisper availability check IPC Handler
+  ipcMain.handle('check-whisper', async () => {
+    try {
+      return checkWhisper(app.getPath('userData'))
+    } catch (err) {
+      console.error('IPC check-whisper error:', err)
+      return { available: false, bin: null, modelPresent: false, error: err.message }
+    }
+  })
+
+  // Precise Alignment IPC Handler (Whisper forced alignment of EPUB chapters)
+  ipcMain.handle('align-chapters', async (event, { filePath, splits, chapters, duration }) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const send = (data) => window.webContents.send('align-progress', data)
+    try {
+      const binPath = findWhisperBinary()
+      if (!binPath) {
+        return {
+          success: false,
+          error: 'whisper.cpp was not found. Install it with "brew install whisper-cpp" (or set WHISPER_CPP_PATH).'
+        }
+      }
+
+      // Download the model on first use.
+      const dataDir = app.getPath('userData')
+      const modelPath = getModelPath(dataDir)
+      if (!fs.existsSync(modelPath)) {
+        send({ status: 'downloading-model', percent: 0 })
+        await ensureModel(dataDir, (received, total) => {
+          send({ status: 'downloading-model', percent: total ? Math.round((received / total) * 100) : 0 })
+        })
+      }
+
+      // Reuse cached silence gaps (for the fine snap after each match).
+      const silences = silenceCache.get(filePath) || []
+
+      const result = await alignChapters({
+        ffmpeg,
+        binPath,
+        modelPath,
+        filePath,
+        splits,
+        chapters,
+        duration,
+        silences,
+        onProgress: (p) => send({ status: 'aligning', ...p })
+      })
+
+      send({ status: 'complete', aligned: result.aligned, total: result.total })
+      return { success: true, ...result }
+    } catch (err) {
+      console.error('IPC align-chapters error:', err)
       return { success: false, error: err.message }
     }
   })
